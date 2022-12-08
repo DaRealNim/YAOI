@@ -33,125 +33,180 @@ class Net(nn.Module):
         out = self.output_layer(x)
         return out
 
-policy_net = Net().to(device)
-target_net = Net().to(device)
-target_net.load_state_dict(policy_net.state_dict())
-target_net.eval()
+class Agent():
+    def __init__(self):
+        self.policy_net = Net().to(device)
+        self.target_net = Net().to(device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
 
-EPS_START       = 0.9
-EPS_END         = 0.05
-EPS_DECAY       = 200
-TARGET_UPDATE   = 10
-GAMMA           = 0.99
-LOSSDISPLAY     = 50
-optimizer = optim.RMSprop(policy_net.parameters())
+        self.EPS_START       = 0.9
+        self.EPS_END         = 0.05
+        self.EPS_DECAY       = 200
+        self.TARGET_UPDATE   = 10
+        self.GAMMA           = 0.99
+        self.LOSSDISPLAY     = 50
+        self.optimizer = optim.RMSprop(self.policy_net.parameters())
 
-def _make_state(board, color):
-    state = np.append(board.arr.reshape(64), color)
-    return torch.from_numpy(state).to(device)
+    def _make_state(self, board, color):
+        state = np.append(board.arr.reshape(64), color)
+        return torch.from_numpy(state).to(device)
 
-def usepolicy(board, color):
-    with torch.no_grad():
-        out = policy_net(_make_state(board, color)).cpu().numpy()
-        illegal_map = board.get_impossibles_moves_map(color)
-        out[illegal_map] = np.nan
-        return np.unravel_index(np.nanargmax(out), (8,8))
+    def usepolicy(self, board, color):
+        with torch.no_grad():
+            out = self.policy_net(self._make_state(board, color)).cpu().numpy()
+            illegal_map = board.get_impossibles_moves_map(color)
+            out[illegal_map] = np.nan
+            return np.unravel_index(np.nanargmax(out), (8,8))
 
 
-def select_action(board, color, steps_done):
-    v = random.random()
-    eps_treshold = EPS_END + (EPS_START-EPS_END) * math.exp(-1*steps_done / EPS_DECAY)
-    if v > eps_treshold:
-        return usepolicy(board, color)
-    else:
-        move = random.choice(board.get_possible_moves(color))
-        return move
+    def select_action(self, board, color, steps_done):
+        v = random.random()
+        eps_treshold = self.EPS_END + (self.EPS_START-self.EPS_END) * math.exp(-1*steps_done / self.EPS_DECAY)
+        if v > eps_treshold:
+            return self.usepolicy(board, color)
+        else:
+            move = random.choice(board.get_possible_moves(color))
+            return move
 
-def optimize(state, nextstate, reward):
-    state_action_val = policy_net(state)
-    next_state_val = target_net(nextstate).detach()
-    expected_state_action_val = (next_state_val * GAMMA) + reward
-    criterion = nn.SmoothL1Loss()
-    loss = criterion(state_action_val, expected_state_action_val)
-    lossval = loss.item()
-    optimizer.zero_grad()
-    loss.backward()
-    for param in policy_net.parameters():
-        param.grad.data.clamp_(-1, 1)
-    optimizer.step()
-    return lossval
+    def optimize(self, state, nextstate, reward):
+        state_action_val = self.policy_net(state)
+        next_state_val = self.target_net(nextstate).detach()
+        expected_state_action_val = (next_state_val * self.GAMMA) + reward
+        criterion = nn.SmoothL1Loss()
+        loss = criterion(state_action_val, expected_state_action_val)
+        lossval = loss.item()
+        self.optimizer.zero_grad()
+        loss.backward()
+        for param in self.policy_net.parameters():
+            param.grad.data.clamp_(-1, 1)
+        self.optimizer.step()
+        return lossval
 
-def save():
-    torch.save(policy_net, "policy.model")
-    torch.save(target_net, "target.model")
+    def save(self, name="model", folder="checkpoints"):
+        torch.save({
+            'policy_state_dict': self.policy_net.state_dict(),
+            'target_state_dict': self.target_net.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+        }, folder + "/" + name+".chkpt")
 
-def load():
-    policy_net = torch.load("policy.model")
-    target_net = torch.load("target.model")
+    def load(self, name="model", folder="checkpoints"):
+        checkpoint = torch.load(folder + "/" + name+".chkpt")
+        self.policy_net.load_state_dict(checkpoint["policy_state_dict"])
+        self.target_net.load_state_dict(checkpoint["target_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-def train(epochs):
-    agentcolor = 1
-    losshistory = []
-    rewardhistory = []
-    for e in tqdm(range(epochs)):
-        gamereward = []
-        if e % LOSSDISPLAY == 0 and len(losshistory)>LOSSDISPLAY:
-            avgl = np.array(losshistory[len(losshistory)-LOSSDISPLAY : len(losshistory)]).mean()
-            avgr = np.array(rewardhistory[len(rewardhistory)-LOSSDISPLAY : len(rewardhistory)]).mean()
-            print("Average last 50 losses : ", avgl)
-            print("Average last 50 games reward : ", avgr)
-        b = Board()
-        currentturn = -1
-        agentcolor *= -1
-        steps = 0
-        for i in itertools.count():
-            if b.is_over():
-                winner = 1 if b.score(1) > b.score(-1) else -1
-                if winner == agentcolor:
-                    reward = 100
+
+    def evaluate(self, against, n=100):
+        agentcolor = -1
+        bar = tqdm(total=n)
+        wins = 0
+        draws = 0
+        for e in range(n):
+            bar.update()
+            b = Board()
+            currentturn = -1
+            agentcolor *= -1
+            
+            while True:
+                bar.write(str(b.arr))
+                if b.is_over():
+                    wscore = b.score(1)
+                    bscore = b.score(-1)
+                    winner = 1 if wscore > bscore else (-1 if wscore < bscore else 0)
+                    if winner == 0:
+                        draws += 1
+                    if winner == agentcolor:
+                        wins += 1
+                    break
+                if not b.get_possible_moves(currentturn):
+                    currentturn *= -1
+                    continue
+                if currentturn == agentcolor:
+                    row, col = self.usepolicy(b, currentturn)
                 else:
-                    reward = -100
-                break
-            if not b.get_possible_moves(currentturn):
+                    row, col = against.usepolicy(b, currentturn)
+                b.put(row, col, currentturn)
                 currentturn *= -1
-                continue
-            state = _make_state(b, currentturn)
+                
+        return wins, draws
 
-            putrow, putcol = select_action(b, currentturn, steps)
-            b.put(putrow, putcol, currentturn)
-            score = b.score(currentturn)
-            done = b.is_over()
 
-            currentturn *= -1
-            nextstate = _make_state(b, currentturn)
 
-            if -currentturn == agentcolor:
-                steps += 1
-                if done:
+    def train(self, epochs, fixed_opponent=None):
+        agentcolor = 1
+        losshistory = []
+        rewardhistory = []
+        bar = tqdm(total=epochs)
+        for e in range(epochs):
+            bar.update()
+            gamereward = []
+            if e % self.LOSSDISPLAY == 0 and len(losshistory)>self.LOSSDISPLAY:
+                avgl = np.array(losshistory[len(losshistory)-self.LOSSDISPLAY : len(losshistory)]).mean()
+                avgr = np.array(rewardhistory[len(rewardhistory)-self.LOSSDISPLAY : len(rewardhistory)]).mean()
+                bar.write("Average last 50 losses : " + str(avgl))
+                bar.write("Average last 50 games reward : " + str(avgr))
+            b = Board()
+            currentturn = -1
+            agentcolor *= -1
+            steps = 0
+            for i in itertools.count():
+                if b.is_over():
                     winner = 1 if b.score(1) > b.score(-1) else -1
                     if winner == agentcolor:
                         reward = 100
                     else:
                         reward = -100
+                    break
+                if not b.get_possible_moves(currentturn):
+                    currentturn *= -1
+                    continue
+
+                state = self._make_state(b, currentturn)
+
+                if fixed_opponent and currentturn != agentcolor:
+                    putrow, putcol = fixed_opponent.usepolicy(b, currentturn)
                 else:
-                    reward = score - b.score(currentturn)
+                    putrow, putcol = self.select_action(b, currentturn, steps)
+                b.put(putrow, putcol, currentturn)
+                score = b.score(currentturn)
+                done = b.is_over()
 
-                gamereward.append(reward)
-                lossval = optimize(state, nextstate, reward)
-                losshistory.append(lossval)
+                currentturn *= -1
+                nextstate = self._make_state(b, currentturn)
 
-                if i % TARGET_UPDATE == 0:
-                    target_net.load_state_dict(policy_net.state_dict())
+                if -currentturn == agentcolor:
+                    steps += 1
+                    if done:
+                        winner = 1 if b.score(1) > b.score(-1) else -1
+                        if winner == agentcolor:
+                            reward = 100
+                        else:
+                            reward = -100
+                    else:
+                        reward = score - b.score(currentturn)
 
-            if done:
-                break
-        rewardhistory.append(np.array(gamereward).sum())
+                    gamereward.append(reward)
+                    lossval = self.optimize(state, nextstate, reward)
+                    losshistory.append(lossval)
 
-            
-    plt.plot(losshistory)
-    plt.show()
-    plt.plot(rewardhistory)
-    plt.show()
+                    if i % self.TARGET_UPDATE == 0:
+                        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+                if done:
+                    break
+            rewardhistory.append(np.array(gamereward).sum())
+
+                
+        plt.plot(losshistory)
+        plt.show()
+        plt.plot(rewardhistory)
+        plt.show()
+
 
 if __name__ == "__main__":
-    train(1000)
+    agent1 = Agent()
+    agent1.load()
+    agent2 = Agent()
+    agent2.load("_fixed")
+    agent1.train(5000, fixed_opponent=agent2)

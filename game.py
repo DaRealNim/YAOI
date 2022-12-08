@@ -3,11 +3,13 @@ import numpy as np
 from environment import Board
 import model
 import time
+import sys
 
-PLAYERCOLOR = -1
+PLAYERCOLOR = 1
 
 class Reversi():
-    def __init__(self):
+    def __init__(self, agent):
+        self.agent = agent
         self.window = Tk()
         self.window.title = "YARE interface"
         self.canvas = Canvas(self.window, width=800, height=800)
@@ -26,7 +28,7 @@ class Reversi():
             self.model_play()
 
     def model_play(self):
-        row, col = model.usepolicy(self.board, self.turn)
+        row, col = self.agent.usepolicy(self.board, self.turn)
         self.board.put(row, col, self.turn)
         self.draw_pieces()
         if self.board.is_over():
@@ -72,7 +74,8 @@ class Reversi():
     def quit(self):
         self.window.quit()
 
-
-model.load()
-instance = Reversi()
+# assumes we have a model named "model" in checkpoints for now
+agent = model.Agent()
+agent.load()
+instance = Reversi(agent)
 instance.mainloop()
