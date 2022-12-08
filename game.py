@@ -34,6 +34,8 @@ class Reversi():
         if self.board.is_over():
             print(self.board.score(-1), self.board.score(1))
             return
+        if not self.board.get_possible_moves(-self.turn):
+            self.model_play()
         self.turn *= -1
 
     def initialize_board(self):
@@ -65,6 +67,9 @@ class Reversi():
             if self.board.is_over():
                 print(self.board.score(-1), self.board.score(1))
                 return
+            
+            if not self.board.get_possible_moves(-self.turn):
+                return
             self.turn *= -1
             self.canvas.update_idletasks()
             time.sleep(1)
@@ -76,6 +81,6 @@ class Reversi():
 
 # assumes we have a model named "model" in checkpoints for now
 agent = model.Agent()
-agent.load()
+agent.load(sys.argv[1])
 instance = Reversi(agent)
 instance.mainloop()
