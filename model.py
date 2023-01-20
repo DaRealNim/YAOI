@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
+from gymenv import OthelloEnv
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -16,23 +17,43 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-        self.input_layer = nn.Linear(65, 128, device=device).double()
-        self.hidden_layer_1 = nn.Linear(128, 128, device=device).double()
-        self.hidden_layer_2 = nn.Linear(128, 128, device=device).double()
-        self.output_layer = nn.Linear(128, 64, device=device).double()
+        self.conv1 = nn.Conv2d(1, 8, 3, device=device).double()
+        self.conv2 = nn.Conv2d(8, 16, 3, device=device).double()
+
+        self.fc1 = nn.Linear(16*8*8, 512, device=device).double()
+        self.fc2 = nn.Linear(512, 256, device=device).double()
+        self.fc3 = nn.Linear(256, 64, device=device).double()
+        
+
+
+        # self.input_layer = nn.Linear(64, 128, device=device).double()
+        # self.hidden_layer_1 = nn.Linear(128, 128, device=device).double()
+        # self.hidden_layer_2 = nn.Linear(128, 128, device=device).double()
+        # self.output_layer = nn.Linear(128, 64, device=device).double()
 
     def forward(self, x):
-        x = self.input_layer(x)
-        x = torch.tanh(x)
+        # x = self.input_layer(x)
+        # x = torch.tanh(x)
 
-        x = self.hidden_layer_1(x)
-        x = torch.tanh(x)
+        # x = self.hidden_layer_1(x)
+        # x = torch.tanh(x)
 
-        x = self.hidden_layer_2(x)
-        x = torch.tanh(x)
+        # x = self.hidden_layer_2(x)
+        # x = torch.tanh(x)
 
-        out = self.output_layer(x)
-        return out
+        # out = self.output_layer(x)
+        x = self.conv1(x.reshape((-1, 1, 8, 8)))
+        x = torch.relu(x)
+        x = self.conv2(x)
+        x = torch.relu(x)
+        x = x.view(-1, 16*8*8)
+        x = self.fc1(x)
+        x = torch.relu(x)
+        x = self.fc2(x)
+        x = torch.relu(x)
+        x = self.fc3(x)
+        x = torch.relu(x)
+        return x
 
 class Agent():
     def __init__(self):
@@ -43,32 +64,33 @@ class Agent():
 
         self.totalepochs = 0
 
-        self.EPS_START       = 0.9
+        self.EPS_START       = 0.99
         self.EPS_END         = 0.05
-        self.EPS_DECAY       = 200
+        self.EPS_DECAY       = 2000
         self.TARGET_UPDATE   = 10
         self.GAMMA           = 0.99
-        self.LOSSDISPLAY     = 100
+        self.DISPLAY         = 200
+        self.EVALUATE        = 20
 
         self.epsilon = self.EPS_START
         self.optimizer = optim.Adam(self.policy_net.parameters())
 
     def _make_state(self, board, color):
-        state = np.append(board.arr.reshape(64), color)
-        return torch.from_numpy(state).to(device)
+        return torch.from_numpy(board.arr.reshape(64)*color).to(device)
 
     def usepolicy(self, board, color):
         with torch.no_grad():
             out = self.policy_net(self._make_state(board, color)).cpu().numpy()
             illegal_map = board.get_impossibles_moves_map(color)
             out[illegal_map] = np.nan
-            return np.unravel_index(np.nanargmax(out), (8,8))
+            return np.unravel_index(np.nanargmax(out), (8,8)), out[np.nanargmax(out)]
 
 
     def select_action(self, board, color):
         v = random.random()
         if v > self.epsilon:
-            return self.usepolicy(board, color)
+            action, _ = self.usepolicy(board, color)
+            return action
         else:
             move = random.choice(board.get_possible_moves(color))
             return move
@@ -95,6 +117,8 @@ class Agent():
         # print(target_next_val, target_next_val.shape)
         # print("\n")
 # 
+        print(target_next_val)
+        print(rewards)
         target_val = (self.GAMMA*target_next_val) + rewards
         # print(target_val, target_val.shape)
         # print("\n")
@@ -134,143 +158,109 @@ class Agent():
         self.epsilon = checkpoint["epsilon"]
 
 
-    def evaluate(self, against, n=1, agentcolor=-1):
-        agentcolor *= -1
-        bar = tqdm(total=n)
-        wins = 0
-        draws = 0
-        cumreward = 0
-        for e in range(n):
-            bar.update()
-            b = Board()
-            currentturn = -1
-            agentcolor *= -1
+    def evaluate(self, against, agentcolor, returnscore=False):
+        env = OthelloEnv()
+        observation = env.reset()
+        reward = 0
+        while True:
+            currentturn = observation["turn"]
+            if currentturn == agentcolor:
+                action, _ = self.usepolicy(observation["board"], currentturn)
+            else:
+                action, _ = against.usepolicy(observation["board"], currentturn)
+
+            observation, reward, terminated, truncated, info = env.step(action)
             
-            while True:
-                # bar.write(str(b.arr))
-                if b.is_over():
-                    # if e%10 == 0:
-                    #     bar.write(str(b.arr) + "\n\n")
-                    wscore = b.score(1)
-                    bscore = b.score(-1)
-                    winner = 1 if wscore > bscore else (-1 if wscore < bscore else 0)
-                    if winner == 0:
-                        cumreward -= 30
-                        draws += 1
-                    elif winner == agentcolor:
-                        cumreward += 100
-                        wins += 1
-                    else:
-                        cumreward -= 100
-                    break
-                if not b.get_possible_moves(currentturn):
-                    currentturn *= -1
-                    continue
-                if currentturn == agentcolor:
-                    row, col = self.usepolicy(b, currentturn)
-                else:
-                    row, col = against.usepolicy(b, currentturn)
-                b.put(row, col, currentturn)
+            if terminated or truncated:
+                reward = 1 if observation["board"].has_won(agentcolor) else 0 if observation["board"].is_draw() else -1
+                if returnscore:
+                    return observation["board"].score(agentcolor), observation["board"].score(-agentcolor)
+                return reward
 
-                if currentturn == agentcolor:
-                    cumreward += b.score(currentturn) - b.score(-currentturn)
+    def _run_evaluation(self, lastchk, bar, cumreward, eval_against):
+        if not lastchk == "" or eval_against:
+            x = Agent()
+            if eval_against:
+                x.load(eval_against)
+            else:
+                x.load(lastchk)
+            rewardBlack = self.evaluate(x, -1)
+            rewardWhite = self.evaluate(x, 1)
+            cumreward.append(rewardBlack)
+            cumreward.append(rewardWhite)
+            # bar.write("Evaluation to previous version cumulative reward : " + str(cumr1+cumr2))
+            # bar.write("Mean cumulative reward since training started : " +str(np.array(cumreward).mean()))
 
-                currentturn *= -1
-                
-        return wins, draws, cumreward
+    def _display_progress(self, epoch, lastchk, bar, losshistory, cumreward):
+        if lastchk != "":
+            os.remove("checkpoints/"+lastchk+".chkpt")
+        lastchk = "checkpoint_e"+str(epoch)
+        self.save(lastchk)
+        
+        avgl = np.array(losshistory[len(losshistory)-self.DISPLAY : len(losshistory)]).mean()
+        bar.write("Average last "+str(self.DISPLAY)+" losses       : " + str(avgl))
+        if cumreward:
+            bar.write("Cumulative reward against previous version : " + str(np.sum(cumreward)))
+        bar.write("Epsilon : " + str(self.epsilon))
+        bar.write("+----------------------------------------+")
+        cumreward.clear()
+        return lastchk
 
 
 
-    def train(self, epochs, lastmodel=None):
-        agentcolor = 1
+    def train(self, epochs, lastmodel=None, eval_against=None):
+        # initialize Gym environment
+        env = OthelloEnv()
+
         losshistory = []
         cumreward = []
         lastchk=""
+
+        # Load a potential previous model for evaluation
         if lastmodel:
             lastchk = lastmodel
             self.load(lastmodel)
+
         bar = tqdm(initial=self.totalepochs, total=self.totalepochs + epochs)
         for e in range(self.totalepochs, self.totalepochs + epochs):
             bar.update()
             self.epsilon = self.EPS_END + (self.EPS_START-self.EPS_END) * math.exp(-1*self.totalepochs / self.EPS_DECAY)
-            if e % self.LOSSDISPLAY == 0 and len(losshistory)>self.LOSSDISPLAY:
-                self.save("checkpoint_e"+str(e))
-                if not lastchk == "":
-                    x = Agent()
-                    x.load(lastchk)
-                    _, _, cumr1 = self.evaluate(x)
-                    _, _, cumr2 = self.evaluate(x, agentcolor=1)
-                    cumr = cumr1+cumr2
-                    cumreward.append(cumr)
-                    os.remove("checkpoints/"+lastchk+".chkpt")
-                    
-                    bar.write("Evaluation to previous version cumulative reward : " + str(cumr1+cumr2))
-                lastchk = "checkpoint_e"+str(e)
-                avgl = np.array(losshistory[len(losshistory)-self.LOSSDISPLAY : len(losshistory)]).mean()
-                bar.write("Average last 100 losses : " + str(avgl))
-                bar.write("Epsilon : " + str(self.epsilon))
-                bar.write("+----------------------------------------+")
-            b = Board()
-            currentturn = -1
-            agentcolor *= -1
+            if e % self.EVALUATE == 0:
+                self._run_evaluation(lastchk, bar, cumreward, eval_against)
+            if e % self.DISPLAY == 0 and len(losshistory)>=self.DISPLAY:
+                lastchk = self._display_progress(e, lastchk, bar, losshistory, cumreward)
+
             memory = {
                 "states"     : [],
                 "nextstates" : [],
                 "rewards"    : [],
                 "actions"    : []
             }
-            for i in itertools.count():
-                if b.is_over():
-                    wscore = b.score(1)
-                    bscore = b.score(-1)
-                    winner = 1 if wscore > bscore else (-1 if wscore < bscore else 0)
-                    if winner == 0:
-                        reward = -30
-                    elif winner == agentcolor:
-                        reward = 100
-                    else:
-                        reward = -100
+
+            observation = env.reset()
+            while True:
+                currentturn = observation["turn"]
+                
+                memory["states"].append(self._make_state(observation["board"], observation["turn"]))
+
+                putrow, putcol = self.select_action(observation["board"], observation["turn"])
+                memory["actions"].append(np.ravel_multi_index((putrow, putcol), (8,8)))
+
+                observation, reward, terminated, truncated, info = env.step((putrow, putcol))
+                memory["rewards"].append(reward)
+                memory["nextstates"].append(self._make_state(observation["board"], observation["turn"]))
+                
+                if terminated or truncated:
                     break
-                if not b.get_possible_moves(currentturn):
-                    currentturn *= -1
-                    continue
 
-                state = self._make_state(b, currentturn)
-
-                # if fixed_opponent and currentturn != agentcolor:
-                #     putrow, putcol = fixed_opponent.usepolicy(b, currentturn)
-                # else:
-                putrow, putcol = self.select_action(b, currentturn)
-                b.put(putrow, putcol, currentturn)
-                score = b.score(currentturn)
-                done = b.is_over()
-
-                currentturn *= -1
-                nextstate = self._make_state(b, currentturn)
-
-                if -currentturn == agentcolor:
-                    if done:
-                        winner = 1 if b.score(1) > b.score(-1) else -1
-                        if winner == agentcolor:
-                            reward = 100
-                        else:
-                            reward = -100
-                    else:
-                        reward = score - b.score(currentturn)
-
-                    memory["states"].append(state)
-                    memory["nextstates"].append(nextstate)
-                    memory["rewards"].append(reward)
-                    memory["actions"].append(np.ravel_multi_index((putrow, putcol), (8,8)))
-
-                    if i % self.TARGET_UPDATE == 0:
-                        self.target_net.load_state_dict(self.policy_net.state_dict())
-
-                if done:
-                    break
+            observation = env.reset()
             lossval = self.optimize(memory)
             losshistory.append(lossval)
             self.totalepochs += 1
+            if e % self.TARGET_UPDATE == 0:
+                self.target_net.load_state_dict(self.policy_net.state_dict())
+
+            
                 
         plt.plot(losshistory)
         plt.show()

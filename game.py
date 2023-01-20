@@ -28,7 +28,8 @@ class Reversi():
             self.model_play()
 
     def model_play(self):
-        row, col = self.agent.usepolicy(self.board, self.turn)
+        (row, col), prob = self.agent.usepolicy(self.board, self.turn)
+        print(prob)
         self.board.put(row, col, self.turn)
         self.draw_pieces()
         if self.board.is_over():

@@ -57,6 +57,12 @@ class Board():
     def score(self, color):
         return np.count_nonzero(self.arr == color)
 
+    def has_won(self, color):
+        return self.score(color) > self.score(-color)
+
+    def is_draw(self):
+        return self.score(-1) == self.score(1)
+
     def get_impossibles_moves_map(self, color):
         a = np.ones((8,8))
         possmoves = np.array(self.get_possible_moves(color))
